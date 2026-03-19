@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Genshai Mart - Lộ Trình Giao Hàng</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { genshaiYellow: '#FFCD1E', genshaiBlue: '#2C4295' }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .suggestions-list { 
+            position: absolute; background: white; width: 100%; z-index: 9999; 
+            border-radius: 12px; max-height: 250px; overflow-y: auto; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: none; margin-top: 5px;
+            border: 1px solid #e2e8f0;
+        }
+        .suggestion-item { padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+        .suggestion-item:hover { background-color: #fff9e6; color: #2C4295; font-weight: 600; }
+        #map { height: 400px; width: 100%; border-radius: 20px; border: 2px solid #f1f5f9; z-index: 1; }
+    </style>
+</head>
+<body class="bg-[#f0f2f8] p-4 md:p-10">
+
+    <div class="max-w-4xl mx-auto bg-white p-6 md:p-8 rounded-3xl shadow-2xl border-t-8 border-genshaiYellow">
+        <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 border-b border-slate-100 pb-6">
+            <h1 class="text-2xl font-black text-genshaiBlue uppercase tracking-tight flex items-center gap-3">
+                <span class="bg-genshaiYellow text-genshaiBlue px-3 py-1 rounded-lg">GENSHAI MART</span> 
+                TÍNH QUÃNG ĐƯỜNG GIAO HÀNG
+            </h1>
+            <div id="status-tag" class="px-4 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full text-center">
+                ● Hệ thống sẵn sàng
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            <div class="bg-yellow-50/30 p-6 rounded-2xl border border-genshaiYellow/30">
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-widest">Nhập địa chỉ nhận hàng (Chọn từ gợi ý)</label>
+                <div class="relative">
+                    <input id="addressInput" type="text" autocomplete="off"
+                           placeholder="Ví dụ: 371D2 Nguyễn Cảnh Chân..." 
+                           class="w-full p-4 border-2 border-slate-200 rounded-xl focus:border-genshaiBlue outline-none font-semibold shadow-sm">
+                    <div id="suggestions" class="suggestions-list"></div>
+                </div>
+            </div>
+
+            <div id="loading-spinner" class="hidden text-center py-4">
+                <div class="animate-spin inline-block w-6 h-6 border-[3px] border-current border-t-transparent text-genshaiBlue rounded-full" role="status"></div>
+                <span class="ml-2 text-sm font-bold text-genshaiBlue">Đang tính toán lộ trình tối ưu...</span>
+            </div>
+
+            <div id="result-section" class="hidden">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div class="p-4 bg-white border-l-4 border-genshaiBlue shadow-md rounded-r-xl border border-slate-100">
+                        <span class="text-[10px] text-slate-400 font-bold uppercase">Cửa hàng phục trách</span>
+                        <div id="res-name" class="font-bold text-genshaiBlue text-lg">---</div>
+                    </div>
+                    <div class="p-4 bg-white border-l-4 border-genshaiYellow shadow-md rounded-r-xl border border-slate-100">
+                        <span class="text-[10px] text-slate-400 font-bold uppercase">Khoảng cách thực tế</span>
+                        <div id="res-dist" class="font-bold text-genshaiBlue text-lg">0.0 km</div>
+                    </div>
+                </div>
+                <div id="map"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+    const stores = [
+        { id: 1, name: "Genshai Saigon Pearl", lat: 10.791360, lon: 106.719149 }, 
+        { id: 2, name: "Genshai The Vista", lat: 10.805451, lon: 106.751637 },  
+        { id: 3, name: "Genshai Vista Verde", lat: 10.776615, lon: 106.756102 },
+        { id: 4, name: "Genshai Sunrise Riverside", lat: 10.723440, lon: 106.703949 },
+        { id: 5, name: "Genshai Richmond City", lat: 10.816637, lon: 106.705969 },
+        { name: "Genshai Empire City", lat: 10.768967, lon: 106.712764 },
+        { name: "Genshai Lavita Charm", lat: 10.837593, lon: 106.763017 },
+        { name: "Genshai Q7 Riverside", lat: 10.722114, lon: 106.742043 }
+    ];
+
+    let userCoords = null;
+    let userMarker = null;
+    let routeLayer = null; // Biến lưu đường kẻ lộ trình
+    const storeMarkers = {}; // Biến lưu marker cửa hàng
+
+    const map = L.map('map', { zoomControl: true }).setView([10.7769, 106.7009], 12);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
+
+    // Vẽ marker cửa hàng và lưu vào object
+    stores.forEach(s => {
+        const marker = L.circleMarker([s.lat, s.lon], {radius: 6, fillColor: '#2C4295', color: '#fff', weight: 2, fillOpacity: 1}).addTo(map).bindPopup(s.name);
+        storeMarkers[s.id] = marker; // Lưu marker theo ID
+    });
+
+    const input = document.getElementById('addressInput');
+    const suggestDiv = document.getElementById('suggestions');
+    let timer;
+
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const val = input.value.trim();
+        if (val.length < 2) { suggestDiv.style.display = 'none'; return; }
+
+        timer = setTimeout(async () => {
+            try {
+                const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(val)}&bbox=106.3,10.3,107.0,11.0&limit=5`);
+                const data = await res.json();
+                renderResults(data.features);
+            } catch (e) { console.error(e); }
+        }, 400);
+    });
+
+    function renderResults(features) {
+        suggestDiv.innerHTML = '';
+        if (!features || features.length === 0) { suggestDiv.style.display = 'none'; return; }
+        suggestDiv.style.display = 'block';
+        features.forEach(f => {
+            const div = document.createElement('div');
+            div.className = 'suggestion-item';
+            const p = f.properties;
+            const addr = `${p.name || ''}, ${p.street || ''}, ${p.city || ''}`.replace(/,,/g, ',').trim();
+            div.innerHTML = `<strong>${p.name || 'Địa điểm'}</strong><br><small class="text-slate-400">${addr}</small>`;
+            div.onclick = () => {
+                input.value = addr;
+                userCoords = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
+                suggestDiv.style.display = 'none';
+                calculateNearest(); // Tự động tính sau khi chọn
+            };
+            suggestDiv.appendChild(div);
+        });
+    }
+
+    async function calculateNearest() {
+        if (!userCoords) return;
+
+        document.getElementById('loading-spinner').classList.remove('hidden');
+        document.getElementById('result-section').classList.add('hidden');
+
+        let nearestStore = null;
+        let minDistance = Infinity;
+
+        // Reset highlight của lần tính trước
+        resetHighlights();
+
+        for (const store of stores) {
+            try {
+                const url = `https://router.project-osrm.org/route/v1/driving/${userCoords.lon},${userCoords.lat};${store.lon},${store.lat}?overview=false`;
+                const response = await fetch(url);
+                const result = await response.json();
+                
+                if (result.code === 'Ok') {
+                    const distance = result.routes[0].distance / 1000;
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        nearestStore = store;
+                    }
+                }
+            } catch (err) { console.error("OSRM Error:", err); }
+        }
+
+        if (nearestStore) {
+            document.getElementById('loading-spinner').classList.add('hidden');
+            document.getElementById('result-section').classList.remove('hidden');
+            document.getElementById('res-name').innerText = nearestStore.name;
+            document.getElementById('res-dist').innerText = minDistance.toFixed(2) + " km";
+
+            // Cập nhật bản đồ
+            if (userMarker) map.removeLayer(userMarker);
+            userMarker = L.marker([userCoords.lat, userCoords.lon]).addTo(map).bindPopup("Vị trí của bạn").openPopup();
+            
+            // --- HIGHLIGHT CỬA HÀNG GẦN NHẤT ---
+            highlightNearestStore(nearestStore);
+
+            // --- VẼ LỘ TRÌNH (LINE) ---
+            drawRoute(nearestStore);
+
+            map.fitBounds([
+                [userCoords.lat, userCoords.lon],
+                [nearestStore.lat, nearestStore.lon]
+            ], { padding: [70, 70] });
+            
+            setTimeout(() => map.invalidateSize(), 200);
+        } else {
+            alert("Không tìm thấy lộ trình di chuyển phù hợp.");
+            document.getElementById('loading-spinner').classList.add('hidden');
+        }
+    }
+
+    // Hàm highlight cửa hàng gần nhất
+    function highlightNearestStore(store) {
+        // Cập nhật màu sắc icon cửa hàng gần nhất thành Đỏ
+        if (storeMarkers[store.id]) {
+            storeMarkers[store.id].setStyle({fillColor: '#ef4444', radius: 8}); // Màu đỏ, lớn hơn
+        }
+    }
+
+    // Hàm reset highlight của lần tính trước
+    function resetHighlights() {
+        // Reset tất cả icon cửa hàng về màu xanh đậm của Genshai
+        stores.forEach(s => {
+            if (storeMarkers[s.id]) {
+                storeMarkers[s.id].setStyle({radius: 6, fillColor: '#2C4295'}); // Màu xanh, nhỏ hơn
+            }
+        });
+
+        // Xóa đường kẻ lộ trình cũ
+        if (routeLayer) {
+            map.removeLayer(routeLayer);
+            routeLayer = null;
+        }
+    }
+
+    // Hàm vẽ đường lộ trình (Line)
+    function drawRoute(store) {
+        // Lấy tọa độ điểm đầu và cuối
+        const userLatLon = [userCoords.lat, userCoords.lon];
+        const storeLatLon = [store.lat, store.lon];
+
+        // Vẽ một đường nối trực tiếp
+        routeLayer = L.polyline([userLatLon, storeLatLon], {
+            color: '#ef4444', // Màu đỏ cho lộ trình gần nhất
+            weight: 3, // Độ dày của đường
+            dashArray: '10, 5' // Đường kẻ đứt nét
+        }).addTo(map);
+    }
+
+    // Đóng gợi ý khi click ra ngoài
+    document.addEventListener('click', (e) => { if (e.target !== input) suggestDiv.style.display = 'none'; });
+    </script>
+</body>
+</html>
